@@ -2,29 +2,30 @@
 
 Production LLM inference via llama.cpp with Metal acceleration. Fork of scry, stripped of signal extraction, nebula visualization, and observer samplers. Model in, tokens out.
 
+## Build
+
+Gaze speaks QNTX's plugin protocol: `plugin/grpc/protocol/{sigil,domain,llm}.proto` and `proto.cmake` there are compiled into the binary. `flake.nix` takes QNTX as a source input, pinned in `flake.lock`, and hands CMake its path as `QNTX_SRC`.
+
+```
+nix build
+```
+
+Without nix, CMake wants a QNTX checkout:
+
+```
+make install QNTX_SRC=/path/to/QNTX
+```
+
 ## Configuration
 
-In `am.toml`:
+Gaze is its record on the node ([ADR-002](https://github.com/teranos/QNTX/blob/main/docs/adr/ADR-002-plugin-configuration.md)): `plugins_add https://github.com/teranos/gaze`, `PUT /api/plugins/gaze/config` with the keys below, `plugins_enable`. The record's `build.*` keys for this repository: `build.core` `github.com/teranos/gaze@main`, `build.command` `nix build`, `build.output` `result/bin/qntx-gaze-plugin`.
 
-```toml
-[Plugin]
-enabled = ["gaze"]
-
-[gaze]
-n_ctx = "8192"               # Max context window (cap). Models use their native size if smaller.
-log_level = "info"           # error | warn | info | debug
-
-# Drop GGUF files here. Gaze reads the model name from GGUF metadata
-# (general.name) and advertises each under that name.
-# Callers address models by name. Gaze does not choose.
-models = [
-  "/path/to/qwen-3b-Q4_K_M.gguf",
-  "/path/to/classifier-Q8.gguf",
-]
-
-# Single model shorthand (legacy, equivalent to models with one entry)
-# model_path = "/path/to/model.gguf"
-```
+| Key | |
+|---|---|
+| `models` | A JSON array of GGUF paths: `["/path/to/qwen-3b-Q4_K_M.gguf","/path/to/classifier-Q8.gguf"]`. Gaze reads each model's name from its GGUF metadata (`general.name`) and advertises it under that name. Callers address models by name. Gaze does not choose. |
+| `model_path` | One GGUF path, read when `models` is empty. |
+| `n_ctx` | Max context window (cap). Models use their native size if smaller. 2048 when unset. |
+| `log_level` | `error`, `warn`, `info` or `debug`. `info` when unset. |
 
 ## Contract
 

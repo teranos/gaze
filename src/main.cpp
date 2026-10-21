@@ -39,7 +39,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--log-level" && i + 1 < argc) {
             log_level = argv[++i];
         } else if (arg == "--version") {
-            std::cout << "qntx-gaze " << PLUGIN_VERSION << std::endl;
+            std::cout << "qntx-gaze-plugin " << PLUGIN_VERSION << std::endl;
             return 0;
         } else if (arg == "--help") {
             print_usage(argv[0]);

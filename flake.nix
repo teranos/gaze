@@ -4,23 +4,21 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # The protocol gaze speaks is QNTX's: plugin/grpc/protocol/*.proto and
+    # proto.cmake there. QNTX is taken as source, not as a flake, so none of
+    # its inputs are fetched; flake.lock pins the rev.
+    qntx = {
+      url = "github:teranos/QNTX";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, qntx }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
 
-        # Proto files live outside the plugin directory. They are laid out under
-        # plugin/grpc/protocol as in the repo: proto.cmake resolves a qualified
-        # import ("plugin/grpc/protocol/sigil.proto") three levels above them.
-        protoRoot = pkgs.runCommand "qntx-protocol" { } ''
-          mkdir -p $out/plugin/grpc
-          cp -r ${../../plugin/grpc/protocol} $out/plugin/grpc/protocol
-        '';
-        protoSrc = "${protoRoot}/plugin/grpc/protocol";
-
-        # llama.cpp pinned to the same commit as the git submodule
+        # llama.cpp pinned to the commit CMakeLists.txt fetches when it is not vendored
         llama-cpp-src = pkgs.fetchFromGitHub {
           owner = "ggml-org";
           repo = "llama.cpp";
@@ -55,7 +53,7 @@
 
           cmakeFlags = [
             "-DCMAKE_BUILD_TYPE=Release"
-            "-DPROTO_DIR=${protoSrc}"
+            "-DQNTX_SRC=${qntx}"
           ];
         };
       in

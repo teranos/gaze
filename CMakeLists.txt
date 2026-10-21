@@ -47,9 +47,22 @@ find_path(MUPDF_INCLUDE_DIR mupdf/fitz.h REQUIRED)
 find_package(protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
-# Proto generation — shared function from proto.cmake
-if(NOT DEFINED PROTO_DIR)
-    set(PROTO_DIR "${CMAKE_SOURCE_DIR}/../../plugin/grpc/protocol")
+# Proto generation — QNTX's plugin/grpc/protocol/proto.cmake, read from a QNTX
+# source tree: -DQNTX_SRC=<path> (what flake.nix passes), or QNTX_SRC in the
+# environment. proto.cmake resolves qualified imports three levels above PROTO_DIR.
+if(NOT DEFINED QNTX_SRC)
+    set(QNTX_SRC "$ENV{QNTX_SRC}")
+endif()
+if(NOT QNTX_SRC)
+    message(FATAL_ERROR
+        "QNTX_SRC is not set: pass -DQNTX_SRC=<QNTX checkout> or export QNTX_SRC"
+    )
+endif()
+set(PROTO_DIR "${QNTX_SRC}/plugin/grpc/protocol")
+if(NOT EXISTS "${PROTO_DIR}/proto.cmake")
+    message(FATAL_ERROR
+        "${PROTO_DIR}/proto.cmake is not there: QNTX_SRC=${QNTX_SRC} is not a QNTX source tree"
+    )
 endif()
 set(GENERATED_SRCS "")
 include(${PROTO_DIR}/proto.cmake)
