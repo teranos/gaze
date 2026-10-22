@@ -289,6 +289,17 @@ InferenceEngine::ChatResult InferenceEngine::stream_chat(
     if (n_tokens < 0) return result;
     result.prompt_tokens = n_tokens;
 
+    generate(temperature, max_tokens, on_token, sampler_cfg, result);
+    return result;
+}
+
+// Samples from the context as the prompt left it, until the model ends, the
+// cap is reached, or the callback says stop.
+void InferenceEngine::generate(float temperature,
+                               int max_tokens,
+                               TokenCallback on_token,
+                               const SamplerConfig& sampler_cfg,
+                               ChatResult& result) {
     const llama_vocab* vocab = llama_model_get_vocab(model_);
     auto sampler = build_sampler_chain(temperature, sampler_cfg);
 
@@ -336,5 +347,4 @@ InferenceEngine::ChatResult InferenceEngine::stream_chat(
     result.generation_ms = total_ms;
     result.decode_ms = decode_us / 1000;
     result.callback_ms = callback_us / 1000;
-    return result;
 }
