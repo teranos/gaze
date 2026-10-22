@@ -11,6 +11,7 @@
 
 #include "domain.grpc.pb.h"
 #include "llm.grpc.pb.h"
+#include "responses.h"
 
 #define PLUGIN_VERSION "0.3.8"
 
@@ -54,6 +55,9 @@ public:
         long generation_ms = 0;
         long decode_ms = 0;
         long callback_ms = 0;
+
+        std::vector<int32_t> decoded;  // the generated tokens the context now holds, in order
+        int reused_tokens = 0;          // prompt tokens the context already held, not decoded again
     };
 
     struct Message {
@@ -84,6 +88,23 @@ public:
                                    TokenCallback on_token,
                                    const SamplerConfig& sampler_cfg = {});
 
+    // What the model wrote for a chat, with the tool calls it made parsed out.
+    struct Reply {
+        std::string content;
+        std::vector<gaze::ToolCall> tool_calls;
+        int prompt_tokens = 0;
+        int completion_tokens = 0;
+        std::string error;  // non-empty when there is no reply, and why
+    };
+
+    // A chat in OpenAI's shape, rendered with the model's own template and tool
+    // format, and the tool calls in what it writes parsed with llama.cpp's parser.
+    Reply respond(const nlohmann::ordered_json& messages,
+                  const nlohmann::ordered_json& tools,
+                  float temperature,
+                  int max_tokens,
+                  const SamplerConfig& sampler_cfg = {});
+
     std::string model_name() const { return model_name_; }
     std::string model_desc() const;       // e.g. "llama 7B Q4_K_M"
     uint64_t model_size_bytes() const;    // file size in bytes
@@ -95,6 +116,11 @@ public:
 private:
     int prepare_prompt(const std::vector<Message>& messages,
                        ChatResult& result);
+    void generate(float temperature,
+                  int max_tokens,
+                  TokenCallback on_token,
+                  const SamplerConfig& sampler_cfg,
+                  ChatResult& result);
     void init_vision(const std::string& model_path);
     void cleanup_vision();
     int prepare_prompt_vision(const std::vector<Message>& messages,
@@ -106,6 +132,9 @@ private:
     std::string model_path_;
     std::string model_name_;
     int effective_ctx_ = 0;
+    // The tokens the context holds from position 0, so the next prompt decodes
+    // only what it does not share with them. Empty after anything else clears it.
+    std::vector<int32_t> held_;
     std::mutex mutex_;
 };
 
@@ -157,6 +186,9 @@ public:
 
     // List all advertised model names.
     std::vector<std::string> model_names() const;
+
+    // POST /v1/responses: the Responses API, answered as one event stream.
+    void respond_http(const protocol::HTTPRequest* req, protocol::HTTPResponse* resp);
 
     // Activity status for UI feedback
     void set_activity(const std::string& a) { std::lock_guard<std::mutex> l(activity_mu_); activity_ = a; }

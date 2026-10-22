@@ -36,6 +36,14 @@ Gaze is its record on the node ([ADR-002](https://github.com/teranos/QNTX/blob/m
 - **Sampler config is global.** Applies to all models. Override per-request if needed.
 - **RAM is the limit.** Each model holds its weights + KV cache in memory. A 3B Q4 is ~2GB. Plan accordingly.
 
+## Responses
+
+`POST /v1/responses`, through the node at `/api/gaze/v1/responses`, answers the OpenAI Responses API the way codex 0.163 reads it: `response.created`, one `response.output_item.done` per item, then `response.completed`. The body is the whole stream, sent once generation ends. codex points at it with a provider whose `base_url` is `<node>/api/gaze/v1` and whose `wire_api` is `responses`.
+
+- **The model's own template.** `input` and `tools` become a chat, rendered with the model's chat template and its tool format. The tool calls the model writes are parsed back with llama.cpp's parser and answered as `function_call` items.
+- **Function tools only.** A tool that is not `type: function` (codex's `web_search`, an MCP namespace) has no form the model can call. It is left out, and the plugin log names it.
+- **No `previous_response_id`.** Gaze keeps nothing between requests. codex sends `store: false` and the whole conversation every turn.
+
 ## Difference from scry
 
 Scry instruments every token with signal data and renders a 3D nebula. Gaze is the production path — same llama.cpp engine, no instrumentation overhead. Tokens stream directly from the sampler to gRPC.

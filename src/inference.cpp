@@ -258,6 +258,7 @@ int InferenceEngine::prepare_prompt(
     }
 
     llama_memory_clear(llama_get_memory(ctx_), true);
+    held_.clear();
 
     auto t0 = std::chrono::steady_clock::now();
     llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
@@ -289,6 +290,17 @@ InferenceEngine::ChatResult InferenceEngine::stream_chat(
     if (n_tokens < 0) return result;
     result.prompt_tokens = n_tokens;
 
+    generate(temperature, max_tokens, on_token, sampler_cfg, result);
+    return result;
+}
+
+// Samples from the context as the prompt left it, until the model ends, the
+// cap is reached, or the callback says stop.
+void InferenceEngine::generate(float temperature,
+                               int max_tokens,
+                               TokenCallback on_token,
+                               const SamplerConfig& sampler_cfg,
+                               ChatResult& result) {
     const llama_vocab* vocab = llama_model_get_vocab(model_);
     auto sampler = build_sampler_chain(temperature, sampler_cfg);
 
@@ -320,6 +332,7 @@ InferenceEngine::ChatResult InferenceEngine::stream_chat(
         auto t4 = std::chrono::steady_clock::now();
         llama_batch next = llama_batch_get_one(&new_token, 1);
         if (llama_decode(ctx_, next) != 0) break;
+        result.decoded.push_back(new_token);
         auto t5 = std::chrono::steady_clock::now();
         decode_us += std::chrono::duration_cast<std::chrono::microseconds>(t5 - t4).count();
         n_generated++;
@@ -336,5 +349,4 @@ InferenceEngine::ChatResult InferenceEngine::stream_chat(
     result.generation_ms = total_ms;
     result.decode_ms = decode_us / 1000;
     result.callback_ms = callback_us / 1000;
-    return result;
 }

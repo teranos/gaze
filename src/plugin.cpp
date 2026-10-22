@@ -138,6 +138,11 @@ grpc::Status GazePlugin::Initialize(grpc::ServerContext* ctx,
     status_route->set_path("/status");
     status_route->set_description("Returns JSON with state, version, model count, and current activity");
 
+    auto* responses_route = resp->add_http_routes();
+    responses_route->set_method("POST");
+    responses_route->set_path("/v1/responses");
+    responses_route->set_description("The OpenAI Responses API, answered with a loaded model as one event stream");
+
     // Its sigils are the routes it declares.
     resp->set_sigils_from(protocol::SIGILS_FROM_HTTP_ROUTES);
 
@@ -338,6 +343,13 @@ grpc::Status GazePlugin::HandleHTTP(grpc::ServerContext* ctx,
     if (req->method() == "GET" && req->path() == "/version") {
         resp->set_status_code(200);
         resp->set_body(PLUGIN_VERSION);
+        return grpc::Status::OK;
+    }
+
+    // The node passes the query along with the path; the route is the path alone.
+    std::string path = req->path().substr(0, req->path().find('?'));
+    if (req->method() == "POST" && path == "/v1/responses") {
+        respond_http(req, resp);
         return grpc::Status::OK;
     }
 

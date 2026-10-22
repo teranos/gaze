@@ -78,6 +78,8 @@ add_executable(qntx-gaze-plugin
     src/vision.cpp
     src/llm_service.cpp
     src/pdf_extract.cpp
+    src/responses.cpp
+    src/respond.cpp
     ${GENERATED_SRCS}
 )
 
@@ -88,11 +90,14 @@ target_include_directories(qntx-gaze-plugin PRIVATE
     ${LLAMA_SOURCE_DIR}/ggml/include
     ${LLAMA_SOURCE_DIR}/common
     ${LLAMA_SOURCE_DIR}/tools/mtmd
+    ${LLAMA_SOURCE_DIR}/vendor
     ${MUPDF_INCLUDE_DIR}
 )
 
+# common is llama.cpp's chat templating and tool-call parsing, which /v1/responses renders and reads with.
 target_link_libraries(qntx-gaze-plugin PRIVATE
     llama
+    common
     mtmd
     gRPC::grpc++
     protobuf::libprotobuf
@@ -105,3 +110,12 @@ if(MUPDF_THIRD_LIB)
 endif()
 
 install(TARGETS qntx-gaze-plugin DESTINATION bin)
+
+# The Responses mapping needs no model, so it is tested on its own.
+enable_testing()
+add_executable(responses_test tests/responses_test.cpp src/responses.cpp)
+target_include_directories(responses_test PRIVATE src ${LLAMA_SOURCE_DIR}/vendor)
+add_test(NAME responses COMMAND responses_test)
+add_executable(prefix_test tests/prefix_test.cpp)
+target_include_directories(prefix_test PRIVATE src)
+add_test(NAME prefix COMMAND prefix_test)

@@ -193,6 +193,7 @@ int InferenceEngine::prepare_prompt_vision(
               << images.size() << " images, " << chunks.size() << " chunks)" << std::endl;
 
     llama_memory_clear(llama_get_memory(ctx_), true);
+    held_.clear();
 
     auto t0 = std::chrono::steady_clock::now();
     llama_pos new_n_past = 0;
