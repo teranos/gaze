@@ -1,5 +1,6 @@
 #include "inference_internal.h"
 #include "chat.h"
+#include "prefix.h"
 
 #include <atomic>
 #include <chrono>
@@ -55,16 +56,28 @@ InferenceEngine::Reply InferenceEngine::respond(const ordered_json& messages,
         return reply;
     }
 
-    llama_memory_clear(llama_get_memory(ctx_), true);
+    // codex sends the whole conversation again each turn, so the context already
+    // holds most of it: only what follows the shared start is decoded.
+    auto* memory = llama_get_memory(ctx_);
+    size_t keep = gaze::reusable_prefix(held_, tokens);
+    if (keep == 0 || !llama_memory_seq_rm(memory, 0, static_cast<llama_pos>(keep), -1)) {
+        llama_memory_clear(memory, true);
+        keep = 0;
+    }
+    held_.clear();
+
     ChatResult result;
+    result.reused_tokens = static_cast<int>(keep);
     auto t0 = std::chrono::steady_clock::now();
-    if (llama_decode(ctx_, llama_batch_get_one(tokens.data(), n_tokens)) != 0) {
+    if (llama_decode(ctx_, llama_batch_get_one(tokens.data() + keep, n_tokens - keep)) != 0) {
+        llama_memory_clear(memory, true);
         reply.error = "the prompt did not decode";
         return reply;
     }
     result.prompt_eval_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - t0).count();
-    std::cout << "[responses] " << n_tokens << " prompt tokens in " << result.prompt_eval_ms << "ms" << std::endl;
+    std::cout << "[responses] " << n_tokens << " prompt tokens, " << keep << " held from the last, "
+              << (n_tokens - keep) << " decoded in " << result.prompt_eval_ms << "ms" << std::endl;
 
     // The template's own stop strings end the answer as the end-of-generation token would.
     std::string written;
@@ -79,6 +92,10 @@ InferenceEngine::Reply InferenceEngine::respond(const ordered_json& messages,
         return true;
     };
     generate(temperature, max_tokens, stop_at, sampler_cfg, result);
+
+    // The context now holds the prompt and what was decoded of the answer.
+    held_.assign(tokens.begin(), tokens.end());
+    held_.insert(held_.end(), result.decoded.begin(), result.decoded.end());
 
     std::string text = result.content;
     for (const auto& stop : params.additional_stops) {

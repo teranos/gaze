@@ -55,6 +55,9 @@ public:
         long generation_ms = 0;
         long decode_ms = 0;
         long callback_ms = 0;
+
+        std::vector<int32_t> decoded;  // the generated tokens the context now holds, in order
+        int reused_tokens = 0;          // prompt tokens the context already held, not decoded again
     };
 
     struct Message {
@@ -129,6 +132,9 @@ private:
     std::string model_path_;
     std::string model_name_;
     int effective_ctx_ = 0;
+    // The tokens the context holds from position 0, so the next prompt decodes
+    // only what it does not share with them. Empty after anything else clears it.
+    std::vector<int32_t> held_;
     std::mutex mutex_;
 };
 

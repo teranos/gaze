@@ -258,6 +258,7 @@ int InferenceEngine::prepare_prompt(
     }
 
     llama_memory_clear(llama_get_memory(ctx_), true);
+    held_.clear();
 
     auto t0 = std::chrono::steady_clock::now();
     llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
@@ -331,6 +332,7 @@ void InferenceEngine::generate(float temperature,
         auto t4 = std::chrono::steady_clock::now();
         llama_batch next = llama_batch_get_one(&new_token, 1);
         if (llama_decode(ctx_, next) != 0) break;
+        result.decoded.push_back(new_token);
         auto t5 = std::chrono::steady_clock::now();
         decode_us += std::chrono::duration_cast<std::chrono::microseconds>(t5 - t4).count();
         n_generated++;
