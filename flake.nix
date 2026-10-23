@@ -52,8 +52,8 @@
           ];
 
           # In the sandbox llama.cpp does not tune to the machine (GGML_NATIVE is
-          # off), and x86 fell to the bare baseline: no SIMD, 2 tokens a second on
-          # kapteyn's i5-7400. The features named here need Haswell or later.
+          # off), and x86 fell to the bare baseline: no SIMD, about 2 tokens a
+          # second of prompt. The features named here need Haswell or later.
           cmakeFlags = [
             "-DCMAKE_BUILD_TYPE=Release"
             "-DQNTX_SRC=${qntx}"
