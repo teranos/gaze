@@ -3,7 +3,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <atomic>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -13,7 +15,7 @@
 #include "llm.grpc.pb.h"
 #include "responses.h"
 
-#define PLUGIN_VERSION "0.3.8"
+#define PLUGIN_VERSION "0.3.9"
 
 // Forward declarations
 struct llama_model;
@@ -141,6 +143,8 @@ private:
 // DomainPluginService implementation
 class GazePlugin final : public protocol::DomainPluginService::Service {
 public:
+    ~GazePlugin() override;
+
     grpc::Status Metadata(grpc::ServerContext* ctx,
                           const protocol::Empty* req,
                           protocol::MetadataResponse* resp) override;
@@ -197,7 +201,21 @@ public:
     const SamplerConfig& sampler_config() const { return sampler_cfg_; }
 
 private:
+    // The models are loaded after Initialize has answered: a node waits 30
+    // seconds for that answer, and a model takes longer than that to load on a
+    // CPU. engines_ is read and written under engines_mu_; a model is in it
+    // once it is loaded whole.
+    mutable std::mutex engines_mu_;
     std::map<std::string, std::unique_ptr<InferenceEngine>> engines_;
+    std::thread loader_;
+    std::atomic<bool> loader_stop_{false};
+    std::atomic<int> still_loading_{0};
+
+    // Loads each model in turn and adds it to engines_.
+    void load_models(std::vector<std::string> paths, int n_ctx, std::string log_level);
+    // Ends the loading the last Initialize started, after the model it is on.
+    void stop_loading();
+
     SamplerConfig sampler_cfg_;
 
     // Activity status

@@ -89,15 +89,6 @@ grpc::Status GazePlugin::Initialize(grpc::ServerContext* ctx,
         }
     }
 
-    for (const auto& path : model_paths) {
-        auto engine = std::make_unique<InferenceEngine>();
-        if (engine->load_model(path, n_ctx)) {
-            std::string name = engine->model_name();
-            engines_[name] = std::move(engine);
-        } else {
-            std::cout << "[init] Failed to load model: " << path << std::endl;
-        }
-    }
 
     // Parse sampler config
     auto parse_int = [&config](const char* key, int fallback) -> int {
@@ -121,10 +112,20 @@ grpc::Status GazePlugin::Initialize(grpc::ServerContext* ctx,
 
     // Sampler config details are available via ConfigSchema RPC
 
-    // Flush condensed log summary
     auto log_it = config.find("log_level");
     std::string log_level = (log_it != config.end()) ? log_it->second : "info";
-    LogCapture::instance().flush_summary(log_level);
+
+    // A node initializes a running plugin again when its record changes: what
+    // the last Initialize loaded goes, and this record's models are loaded.
+    // The answer does not wait for them (see plugin.h).
+    stop_loading();
+    {
+        std::lock_guard<std::mutex> lock(engines_mu_);
+        engines_.clear();
+    }
+    loader_stop_.store(false);
+    still_loading_.store(static_cast<int>(model_paths.size()));
+    loader_ = std::thread(&GazePlugin::load_models, this, model_paths, n_ctx, log_level);
 
     resp->set_llm_provider(true);
 
@@ -149,26 +150,58 @@ grpc::Status GazePlugin::Initialize(grpc::ServerContext* ctx,
     return grpc::Status::OK;
 }
 
+void GazePlugin::load_models(std::vector<std::string> paths, int n_ctx, std::string log_level) {
+    for (const auto& path : paths) {
+        if (loader_stop_.load()) break;
+        auto engine = std::make_unique<InferenceEngine>();
+        if (engine->load_model(path, n_ctx)) {
+            std::string name = engine->model_name();
+            std::lock_guard<std::mutex> lock(engines_mu_);
+            engines_[name] = std::move(engine);
+        } else {
+            std::cout << "[init] Failed to load model: " << path << std::endl;
+        }
+        still_loading_.fetch_sub(1);
+    }
+    still_loading_.store(0);
+    // Flush condensed log summary
+    LogCapture::instance().flush_summary(log_level);
+}
+
+void GazePlugin::stop_loading() {
+    loader_stop_.store(true);
+    if (loader_.joinable()) loader_.join();
+}
+
+GazePlugin::~GazePlugin() {
+    stop_loading();
+}
+
 grpc::Status GazePlugin::Shutdown(grpc::ServerContext* ctx,
                                    const protocol::Empty* req,
                                    protocol::ShutdownResponse* resp) {
+    stop_loading();
+    std::lock_guard<std::mutex> lock(engines_mu_);
     engines_.clear();
     resp->set_stopped(true);
     return grpc::Status::OK;
 }
 
 InferenceEngine* GazePlugin::get_engine(const std::string& model_name) {
+    std::lock_guard<std::mutex> lock(engines_mu_);
     auto it = engines_.find(model_name);
     if (it != engines_.end()) return it->second.get();
     return nullptr;
 }
 
 InferenceEngine* GazePlugin::default_engine() {
+    std::lock_guard<std::mutex> lock(engines_mu_);
     if (engines_.empty()) return nullptr;
     return engines_.begin()->second.get();
 }
 
 std::vector<std::string> GazePlugin::model_names() const {
+    std::lock_guard<std::mutex> lock(engines_mu_);
     std::vector<std::string> names;
     names.reserve(engines_.size());
     for (const auto& [name, _] : engines_) {
@@ -181,10 +214,14 @@ grpc::Status GazePlugin::Health(grpc::ServerContext* ctx,
                                  const protocol::Empty* req,
                                  protocol::HealthResponse* resp) {
     auto* details = resp->mutable_details();
+    std::lock_guard<std::mutex> lock(engines_mu_);
+    int still_loading = still_loading_.load();
 
     if (engines_.empty()) {
         resp->set_healthy(true);
-        resp->set_message("no models loaded");
+        resp->set_message(still_loading > 0
+            ? "loading " + std::to_string(still_loading) + " model(s)"
+            : "no models loaded");
         return grpc::Status::OK;
     }
 
@@ -257,7 +294,8 @@ grpc::Status GazePlugin::Health(grpc::ServerContext* ctx,
         (*details)["quantization"] = quant;
     }
 
-    resp->set_message(std::to_string(engines_.size()) + " model(s): " + models_str);
+    resp->set_message(std::to_string(engines_.size()) + " model(s): " + models_str
+        + (still_loading > 0 ? ", loading " + std::to_string(still_loading) + " more" : ""));
     return grpc::Status::OK;
 }
 
@@ -354,10 +392,15 @@ grpc::Status GazePlugin::HandleHTTP(grpc::ServerContext* ctx,
     }
 
     if (req->method() == "GET" && req->path() == "/status") {
-        std::string state = engines_.empty() ? "no_model" : "ready";
+        size_t loaded;
+        {
+            std::lock_guard<std::mutex> lock(engines_mu_);
+            loaded = engines_.size();
+        }
+        std::string state = loaded > 0 ? "ready" : (still_loading_.load() > 0 ? "loading" : "no_model");
         std::string act = activity();
         std::string body = "{\"state\":\"" + state + "\",\"version\":\"" + PLUGIN_VERSION + "\"";
-        body += ",\"models\":" + std::to_string(engines_.size());
+        body += ",\"models\":" + std::to_string(loaded);
         if (!act.empty()) body += ",\"activity\":\"" + act + "\"";
         body += "}";
         resp->set_status_code(200);
