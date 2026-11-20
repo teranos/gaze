@@ -171,7 +171,7 @@ void GazePlugin::respond_http(const protocol::HTTPRequest* req, protocol::HTTPRe
     }
 
     std::string model = body.value("model", "");
-    InferenceEngine* engine = model.empty() ? default_engine() : get_engine(model);
+    std::shared_ptr<InferenceEngine> engine = model.empty() ? default_engine() : get_engine(model);
     if (!engine || !engine->is_loaded()) {
         std::string names;
         for (const auto& name : model_names()) names += (names.empty() ? "" : ", ") + name;
