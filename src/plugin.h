@@ -3,7 +3,12 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <memory>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -13,7 +18,7 @@
 #include "llm.grpc.pb.h"
 #include "responses.h"
 
-#define PLUGIN_VERSION "0.3.8"
+#define PLUGIN_VERSION "0.3.10"
 
 // Forward declarations
 struct llama_model;
@@ -141,6 +146,9 @@ private:
 // DomainPluginService implementation
 class GazePlugin final : public protocol::DomainPluginService::Service {
 public:
+    GazePlugin();
+    ~GazePlugin() override;
+
     grpc::Status Metadata(grpc::ServerContext* ctx,
                           const protocol::Empty* req,
                           protocol::MetadataResponse* resp) override;
@@ -178,11 +186,15 @@ public:
                             protocol::ExecuteJobResponse* resp) override;
 
 
+    // A request holds the engine it was handed until it is done with it: a
+    // record that changes, or a shutdown, takes the engine out of engines_ and
+    // the engine itself goes when the last request holding it has finished.
+
     // Get engine by model name. Returns nullptr if not found.
-    InferenceEngine* get_engine(const std::string& model_name);
+    std::shared_ptr<InferenceEngine> get_engine(const std::string& model_name);
 
     // Get the first (or only) engine. Returns nullptr if none loaded.
-    InferenceEngine* default_engine();
+    std::shared_ptr<InferenceEngine> default_engine();
 
     // List all advertised model names.
     std::vector<std::string> model_names() const;
@@ -197,7 +209,36 @@ public:
     const SamplerConfig& sampler_config() const { return sampler_cfg_; }
 
 private:
-    std::map<std::string, std::unique_ptr<InferenceEngine>> engines_;
+    // The models are loaded after Initialize has answered: a node waits 30
+    // seconds for that answer, and a model takes longer than that to load on a
+    // CPU. One thread loads, for as long as the plugin lives. Initialize and
+    // Shutdown only say what is wanted and never wait for a load: a record
+    // that changes while a model is loading is answered at once, and the
+    // loader drops what it was loading for the record before.
+
+    // What the record last asked for.
+    struct Wanted {
+        std::vector<std::string> paths;
+        int n_ctx = 2048;
+        std::string log_level = "info";
+    };
+    std::mutex wanted_mu_;                  // wanted_ and quit_; taken before engines_mu_, never after
+    std::condition_variable wanted_cv_;
+    Wanted wanted_;
+    bool quit_ = false;
+    // Which asking wanted_ is. Raised under both mutexes, so the loader's wait
+    // misses none and what it adds to engines_ is of the asking it checked.
+    std::atomic<uint64_t> asked_{0};
+
+    mutable std::mutex engines_mu_;         // engines_ and still_loading_
+    std::map<std::string, std::shared_ptr<InferenceEngine>> engines_;
+    int still_loading_ = 0;
+
+    std::thread loader_;
+    void loader_loop();
+    // What is loaded goes, and paths are loaded in its place.
+    void want(Wanted wanted);
+
     SamplerConfig sampler_cfg_;
 
     // Activity status

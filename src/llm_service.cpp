@@ -104,7 +104,7 @@ static std::vector<InferenceEngine::Message> build_messages(
 grpc::Status GazeLLMService::Chat(grpc::ServerContext* ctx,
                                    const protocol::LLMChatRequest* req,
                                    protocol::LLMChatResponse* resp) {
-    InferenceEngine* engine = nullptr;
+    std::shared_ptr<InferenceEngine> engine;
     if (!req->model().empty()) {
         engine = plugin_->get_engine(req->model());
         if (!engine) {
@@ -161,7 +161,7 @@ grpc::Status GazeLLMService::Chat(grpc::ServerContext* ctx,
 grpc::Status GazeLLMService::StreamChat(grpc::ServerContext* ctx,
                                          const protocol::LLMChatRequest* req,
                                          grpc::ServerWriter<protocol::LLMChatChunk>* writer) {
-    InferenceEngine* engine = nullptr;
+    std::shared_ptr<InferenceEngine> engine;
     if (!req->model().empty()) {
         engine = plugin_->get_engine(req->model());
         if (!engine) {
