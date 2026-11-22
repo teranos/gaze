@@ -114,11 +114,13 @@ grpc::Status GazePlugin::Initialize(grpc::ServerContext* ctx,
 
     auto log_it = config.find("log_level");
     std::string log_level = (log_it != config.end()) ? log_it->second : "info";
+    int idle_seconds = parse_int("idle_unload_seconds", 0);
+    if (idle_seconds < 0) idle_seconds = 0;
 
     // A node initializes a running plugin again when its record changes: what
     // the last Initialize loaded goes, and this record's models are loaded.
     // The answer waits for no load (see plugin.h).
-    want(Wanted{model_paths, n_ctx, log_level});
+    want(Wanted{model_paths, n_ctx, log_level, idle_seconds});
 
     resp->set_llm_provider(true);
 
@@ -154,6 +156,11 @@ GazePlugin::~GazePlugin() {
     loader_.join();
 }
 
+int64_t GazePlugin::seconds_now() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 void GazePlugin::want(Wanted wanted) {
     {
         std::lock_guard<std::mutex> wanted_lock(wanted_mu_);
@@ -161,9 +168,33 @@ void GazePlugin::want(Wanted wanted) {
         engines_.clear();
         still_loading_ = static_cast<int>(wanted.paths.size());
         wanted_ = std::move(wanted);
+        idled_ = false;
+        last_used_.store(seconds_now());
         asked_.fetch_add(1);
     }
     wanted_cv_.notify_one();
+    loaded_cv_.notify_all();
+}
+
+// "it needs to kind of get out of the way of other things happening"
+void GazePlugin::ready_for_a_request() {
+    last_used_.store(seconds_now());
+    bool asked = false;
+    {
+        std::lock_guard<std::mutex> wanted_lock(wanted_mu_);
+        if (idled_) {
+            std::lock_guard<std::mutex> engines_lock(engines_mu_);
+            idled_ = false;
+            still_loading_ = static_cast<int>(wanted_.paths.size());
+            asked_.fetch_add(1);
+            asked = true;
+            std::cout << "[idle] A request came: loading " << wanted_.paths.size() << " model(s) again" << std::endl;
+        }
+    }
+    if (asked) wanted_cv_.notify_one();
+    // A model takes about a minute to load on a CPU; a request waits up to three.
+    std::unique_lock<std::mutex> lock(engines_mu_);
+    loaded_cv_.wait_for(lock, std::chrono::minutes(3), [&] { return !engines_.empty() || still_loading_ <= 0; });
 }
 
 void GazePlugin::loader_loop() {
@@ -173,8 +204,31 @@ void GazePlugin::loader_loop() {
         uint64_t asking;
         {
             std::unique_lock<std::mutex> lock(wanted_mu_);
-            wanted_cv_.wait(lock, [&] { return quit_ || asked_.load() != loaded_for; });
-            if (quit_) return;
+            for (;;) {
+                if (quit_) return;
+                if (asked_.load() != loaded_for) break;
+                const int idle = wanted_.idle_seconds;
+                if (idle <= 0 || idled_) {
+                    wanted_cv_.wait(lock);
+                    continue;
+                }
+                const int64_t left = last_used_.load() + idle - seconds_now();
+                if (left > 0) {
+                    wanted_cv_.wait_for(lock, std::chrono::seconds(left));
+                    continue;
+                }
+                // Idle for long enough: what is loaded goes, unless a request holds it.
+                std::lock_guard<std::mutex> engines_lock(engines_mu_);
+                bool held = false;
+                for (const auto& [_, engine] : engines_) held = held || engine.use_count() > 1;
+                if (held || engines_.empty()) {
+                    last_used_.store(seconds_now());
+                    continue;
+                }
+                engines_.clear();
+                idled_ = true;
+                std::cout << "[idle] No request for " << idle << "s: the model(s) are let go" << std::endl;
+            }
             wanted = wanted_;
             asking = asked_.load();
         }
@@ -192,6 +246,8 @@ void GazePlugin::loader_loop() {
                 std::cout << "[init] Failed to load model: " << path << std::endl;
             }
             still_loading_--;
+            last_used_.store(seconds_now());
+            loaded_cv_.notify_all();
         }
         // Flush condensed log summary
         LogCapture::instance().flush_summary(wanted.log_level);
@@ -209,6 +265,7 @@ grpc::Status GazePlugin::Shutdown(grpc::ServerContext* ctx,
 }
 
 std::shared_ptr<InferenceEngine> GazePlugin::get_engine(const std::string& model_name) {
+    ready_for_a_request();
     std::lock_guard<std::mutex> lock(engines_mu_);
     auto it = engines_.find(model_name);
     if (it != engines_.end()) return it->second;
@@ -216,6 +273,7 @@ std::shared_ptr<InferenceEngine> GazePlugin::get_engine(const std::string& model
 }
 
 std::shared_ptr<InferenceEngine> GazePlugin::default_engine() {
+    ready_for_a_request();
     std::lock_guard<std::mutex> lock(engines_mu_);
     if (engines_.empty()) return nullptr;
     return engines_.begin()->second;
@@ -338,6 +396,13 @@ grpc::Status GazePlugin::ConfigSchema(grpc::ServerContext* ctx,
     ctx_field.set_min_value("512");
     ctx_field.set_max_value("32768");
     (*fields)["n_ctx"] = ctx_field;
+
+    protocol::ConfigFieldSchema idle_field;
+    idle_field.set_type("number");
+    idle_field.set_description("Seconds without a request after which the models are let go, and loaded again on the next request; 0 keeps them loaded");
+    idle_field.set_default_value("0");
+    idle_field.set_min_value("0");
+    (*fields)["idle_unload_seconds"] = idle_field;
 
     protocol::ConfigFieldSchema top_k_field;
     top_k_field.set_type("number");
