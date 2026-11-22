@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -18,7 +19,7 @@
 #include "llm.grpc.pb.h"
 #include "responses.h"
 
-#define PLUGIN_VERSION "0.3.10"
+#define PLUGIN_VERSION "0.3.12"
 
 // Forward declarations
 struct llama_model;
@@ -221,6 +222,9 @@ private:
         std::vector<std::string> paths;
         int n_ctx = 2048;
         std::string log_level = "info";
+        // "it needs to kind of get out of the way of other things happening"
+        // Seconds without a request after which what is loaded is let go; 0 never.
+        int idle_seconds = 0;
     };
     std::mutex wanted_mu_;                  // wanted_ and quit_; taken before engines_mu_, never after
     std::condition_variable wanted_cv_;
@@ -233,6 +237,17 @@ private:
     mutable std::mutex engines_mu_;         // engines_ and still_loading_
     std::map<std::string, std::shared_ptr<InferenceEngine>> engines_;
     int still_loading_ = 0;
+    std::condition_variable loaded_cv_;     // with engines_mu_: a model came, or the loader is done
+
+    // What is wanted was let go for want of requests (under wanted_mu_). The
+    // next request asks for it again and waits while it loads.
+    bool idled_ = false;
+    std::atomic<int64_t> last_used_{0};     // steady clock, seconds
+    static int64_t seconds_now();
+    // A request is coming: what was let go is asked for again, and the request
+    // waits while the model it names (any, when it names none) is still loading.
+    // The engine, or nullptr when there is none.
+    std::shared_ptr<InferenceEngine> ready_for_a_request(const std::string& model_name);
 
     std::thread loader_;
     void loader_loop();
