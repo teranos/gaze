@@ -403,6 +403,8 @@ grpc::Status GazePlugin::ConfigSchema(grpc::ServerContext* ctx,
     idle_field.set_description("Seconds without a request after which the models are let go, and loaded again on the next request; 0 keeps them loaded");
     idle_field.set_default_value("0");
     idle_field.set_min_value("0");
+    // A node refuses a number field that names no greatest value: a day.
+    idle_field.set_max_value("86400");
     (*fields)["idle_unload_seconds"] = idle_field;
 
     protocol::ConfigFieldSchema top_k_field;
