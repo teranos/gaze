@@ -177,7 +177,7 @@ void GazePlugin::want(Wanted wanted) {
 }
 
 // "it needs to kind of get out of the way of other things happening"
-void GazePlugin::ready_for_a_request() {
+std::shared_ptr<InferenceEngine> GazePlugin::ready_for_a_request(const std::string& model_name) {
     last_used_.store(seconds_now());
     bool asked = false;
     {
@@ -192,9 +192,17 @@ void GazePlugin::ready_for_a_request() {
         }
     }
     if (asked) wanted_cv_.notify_one();
-    // A model takes about a minute to load on a CPU; a request waits up to three.
+    // A model takes about a minute to load on a CPU; a request waits up to three
+    // for the model it names, or for any when it names none, or until loading is
+    // done. The engine is taken under the same lock, so letting go cannot come between.
     std::unique_lock<std::mutex> lock(engines_mu_);
-    loaded_cv_.wait_for(lock, std::chrono::minutes(3), [&] { return !engines_.empty() || still_loading_ <= 0; });
+    auto found = [&]() -> std::shared_ptr<InferenceEngine> {
+        if (model_name.empty()) return engines_.empty() ? nullptr : engines_.begin()->second;
+        auto it = engines_.find(model_name);
+        return it == engines_.end() ? nullptr : it->second;
+    };
+    loaded_cv_.wait_for(lock, std::chrono::minutes(3), [&] { return found() != nullptr || still_loading_ <= 0; });
+    return found();
 }
 
 void GazePlugin::loader_loop() {
@@ -265,18 +273,11 @@ grpc::Status GazePlugin::Shutdown(grpc::ServerContext* ctx,
 }
 
 std::shared_ptr<InferenceEngine> GazePlugin::get_engine(const std::string& model_name) {
-    ready_for_a_request();
-    std::lock_guard<std::mutex> lock(engines_mu_);
-    auto it = engines_.find(model_name);
-    if (it != engines_.end()) return it->second;
-    return nullptr;
+    return ready_for_a_request(model_name);
 }
 
 std::shared_ptr<InferenceEngine> GazePlugin::default_engine() {
-    ready_for_a_request();
-    std::lock_guard<std::mutex> lock(engines_mu_);
-    if (engines_.empty()) return nullptr;
-    return engines_.begin()->second;
+    return ready_for_a_request("");
 }
 
 std::vector<std::string> GazePlugin::model_names() const {

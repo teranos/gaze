@@ -19,7 +19,7 @@
 #include "llm.grpc.pb.h"
 #include "responses.h"
 
-#define PLUGIN_VERSION "0.3.11"
+#define PLUGIN_VERSION "0.3.12"
 
 // Forward declarations
 struct llama_model;
@@ -245,8 +245,9 @@ private:
     std::atomic<int64_t> last_used_{0};     // steady clock, seconds
     static int64_t seconds_now();
     // A request is coming: what was let go is asked for again, and the request
-    // waits while a model is still loading.
-    void ready_for_a_request();
+    // waits while the model it names (any, when it names none) is still loading.
+    // The engine, or nullptr when there is none.
+    std::shared_ptr<InferenceEngine> ready_for_a_request(const std::string& model_name);
 
     std::thread loader_;
     void loader_loop();
