@@ -19,7 +19,7 @@
 #include "llm.grpc.pb.h"
 #include "responses.h"
 
-#define PLUGIN_VERSION "0.3.12"
+#define PLUGIN_VERSION "0.3.13"
 
 // Forward declarations
 struct llama_model;
